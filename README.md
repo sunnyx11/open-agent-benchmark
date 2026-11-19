@@ -1,67 +1,57 @@
 # open-agent-benchmark
-Absolutely. Here is the proposed technical architecture. To clarify, this is the planned design; implementation has not started yet.
 
-### 1. Isolated Agent Execution with Docker
+Open Agent Benchmark is a project for evaluating coding agents on tasks with reproducible, benchmark-defined results. The initial milestone is to run SWE-bench tasks in isolated Docker environments, evaluate the resulting patches using the official SWE-bench methodology, and record results and execution metrics.
 
-Each benchmark task will run inside an independent Docker container.
+## Run the demo
 
-- A task scheduler assigns benchmark instances to isolated workers.
-- Each container starts from a predefined benchmark image containing the required repository, dependencies, and test environment.
-- The agent receives the task description and controlled access to the repository through a standardized adapter.
-- The agent can inspect files, execute commands, modify code, and run tests within the container.
-- Containers will have configurable CPU, memory, execution-time, and network restrictions.
-- After execution, the system collects the final Git diff, execution logs, test results, token usage, and timing information.
-- Containers are destroyed after artifacts are collected, preventing state leakage between tasks.
+From the repository root, run the built-in addition repair task with Python 3.10+ and Git.
 
-Docker isolation will be supplemented with appropriate security restrictions, since containers alone are not a complete security boundary for untrusted code.
+```bash
+python -m src
+python -m src --agent noop
+```
 
-### 2. Diff Collection and Automated Evaluation
+The default agent applies a deterministic repair. The `noop` agent leaves the defect in place so the evaluator reports an unresolved task. The CLI prints the verdict and the saved run directory. Exit codes are `0` for resolved, `1` for unresolved, and `2` for command or runner errors.
 
-The agent's final changes will be captured using Git.
+Each completed run creates its own directory under `runs/`. Set `--output-dir` to save it elsewhere.
 
-The evaluation pipeline will:
+| Artifact | Content |
+| --- | --- |
+| `changes.patch` | Final Git patch relative to the baseline commit |
+| `agent.log` | Task prompt and agent action |
+| `evaluation.log` | Verification output from the patched checkout |
+| `result.json` | Task and agent IDs, baseline commit, verdict, verification exit code, and elapsed time |
 
-1. Extract the final patch using `git diff`.
-2. Verify that the patch applies cleanly to the original repository state.
-3. Apply the patch to a clean evaluation environment.
-4. Run the benchmark's official test and verification scripts.
-5. Record whether the issue is successfully resolved.
-6. Store test output, exit codes, failure details, and execution metrics.
+### Run in Docker
 
-For SWE-bench, I will follow its official evaluation methodology rather than relying on LLM-based subjective scoring. Other benchmarks will use their respective official scoring mechanisms.
+From the repository root in PowerShell, build the demo image and run it with network access disabled and CPU and memory limits. The bind mount keeps the artifacts on the host.
 
-### 3. Database Schema
+```powershell
+docker build -t open-agent-benchmark-demo -f docker/Dockerfile .
+New-Item -ItemType Directory -Force runs | Out-Null
+docker run --rm --network none --cpus 1 --memory 256m --mount "type=bind,source=$($PWD.Path)/runs,target=/benchmark/runs" open-agent-benchmark-demo
+```
 
-I plan to use PostgreSQL with the following core entities:
+### Run the tests
 
-**benchmarks**
-- id, name, version, description, dataset_source
+With pytest installed, run `python -m pytest -q` from the repository root.
 
-**benchmark_tasks**
-- id, benchmark_id, task_external_id, repository, base_commit, task_definition
+## Repository layout
 
-**agents**
-- id, name, provider, model, version, configuration
+```text
+.
+├── docs/               # Architecture documentation
+├── docker/             # Benchmark worker images
+├── src/
+│   ├── benchmarks/     # Dataset loaders and task definitions
+│   ├── agents/         # Agent adapters
+│   ├── scheduler/      # Task dispatch and run coordination
+│   ├── runner/         # Container execution and artifact collection
+│   ├── evaluation/     # Benchmark-specific evaluators
+│   └── storage/        # Run records and artifact persistence
+└── tests/
+    ├── unit/           # Tests for individual modules
+    └── integration/    # Tests for interactions between modules
+```
 
-**benchmark_runs**
-- id, benchmark_id, agent_id, status, started_at, completed_at, configuration
-
-**task_runs**
-- id, run_id, task_id, status, success, execution_time, input_tokens, output_tokens, estimated_cost
-
-**task_artifacts**
-- id, task_run_id, artifact_type, storage_uri, checksum, metadata
-
-Artifacts will include Git patches, execution logs, test reports, and other debugging information. Large artifacts will be stored in object storage rather than directly in PostgreSQL.
-
-### 4. Overall Architecture
-
-The main workflow will be:
-
-Benchmark Dataset → Task Scheduler → Docker Worker → Agent Adapter → Git Diff Collection → Official Evaluator → PostgreSQL / Object Storage → Results Dashboard
-
-The architecture will be modular so that new benchmarks and agent providers can be added without redesigning the entire platform.
-
-My initial milestone is to implement the SWE-bench pipeline end to end, validate reproducible task execution, and then progressively introduce additional benchmarks such as Terminal-Bench, WebArena, and BFCL.
-
-This is the concrete engineering plan I intend to build with Devin's assistance.
+See the [architecture overview](docs/architecture.md) for the planned task lifecycle and storage model.
